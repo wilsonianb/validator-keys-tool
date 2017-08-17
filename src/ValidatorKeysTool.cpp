@@ -20,11 +20,11 @@
 
 #include <ValidatorKeysTool.h>
 #include <ValidatorKeys.h>
+#include <ripple/beast/core/LexicalCast.h>
 #include <ripple/beast/core/PlatformConfig.h>
 #include <ripple/beast/core/SemanticVersion.h>
 #include <ripple/beast/unit_test.h>
 #include <beast/unit_test/dstream.hpp>
-#include <boost/filesystem.hpp>
 #include <boost/format.hpp>
 #include <boost/program_options.hpp>
 
@@ -65,86 +65,38 @@ static int runUnitTests ()
     return EXIT_SUCCESS;
 }
 
-void createKeyFile (boost::filesystem::path const& keyFile)
+void createManifest (
+    std::string const& masterSecretKey,
+    std::string const& secretKey,
+    std::uint32_t const& sequence)
 {
     using namespace ripple;
 
-    if (exists (keyFile))
-        throw std::runtime_error (
-            "Refusing to overwrite existing key file: " +
-                keyFile.string ());
+    ValidatorKeys const keys (masterSecretKey, KeyType::ed25519);
 
-    ValidatorKeys const keys (KeyType::ed25519);
-    keys.writeToFile (keyFile);
+    auto const manifest = keys.createManifest (secretKey, KeyType::ed25519, sequence);
 
-    std::cout << "Validator keys stored in " <<
-        keyFile.string() <<
-        "\n\nThis file should be stored securely and not shared.\n\n";
+    if (! manifest)
+        throw std::runtime_error ("Unable to create manifest.\n");
+
+    std::cout << *manifest << std::endl << std::endl;
 }
 
-void createToken (boost::filesystem::path const& keyFile)
+void createRevocation (std::string const& masterSecretKey)
 {
     using namespace ripple;
 
-    auto keys = ValidatorKeys::make_ValidatorKeys (keyFile);
-
-    if (keys.revoked ())
-        throw std::runtime_error (
-            "Validator keys have been revoked.");
-
-    auto const token = keys.createValidatorToken ();
-
-    if (! token)
-        throw std::runtime_error (
-            "Maximum number of tokens have already been generated.\n"
-            "Revoke validator keys if previous token has been compromised.");
-
-    // Update key file with new token sequence
-    keys.writeToFile (keyFile);
-
-    std::cout << "Update rippled.cfg file with these values and restart rippled:\n\n";
-    std::cout << "# validator public key: " <<
-        toBase58 (TOKEN_NODE_PUBLIC, keys.publicKey()) << "\n\n";
-    std::cout << "[validator_token]\n";
-
-    auto const tokenStr = token->toString();
-    auto const len = 72;
-    for (auto i = 0; i < tokenStr.size(); i += len)
-        std::cout << tokenStr.substr(i, len) << std::endl;
-
-    std::cout << std::endl;
-}
-
-void createRevocation (boost::filesystem::path const& keyFile)
-{
-    using namespace ripple;
-
-    auto keys = ValidatorKeys::make_ValidatorKeys (keyFile);
-
-    if (keys.revoked())
-        std::cout << "WARNING: Validator keys have already been revoked!\n\n";
-    else
-        std::cout << "WARNING: This will revoke your validator keys!\n\n";
+    ValidatorKeys const keys (masterSecretKey, KeyType::ed25519);
 
     auto const revocation = keys.revoke ();
 
-    // Update key file with new token sequence
-    keys.writeToFile (keyFile);
-
-    std::cout << "Update rippled.cfg file with these values and restart rippled:\n\n";
-    std::cout << "# validator public key: " <<
-        toBase58 (TOKEN_NODE_PUBLIC, keys.publicKey()) << "\n\n";
+    std::cout << "Master public key:\n" << strHex(keys.publicKey()) << "\n\n";
     std::cout << "[validator_key_revocation]\n";
 
-    auto const len = 72;
-    for (auto i = 0; i < revocation.size(); i += len)
-        std::cout << revocation.substr(i, len) << std::endl;
-
-    std::cout << std::endl;
+    std::cout << revocation << std::endl << std::endl;
 }
 
-void signData (std::string const& data,
-    boost::filesystem::path const& keyFile)
+void signData (std::string const& secretKey, std::string const& data)
 {
     using namespace ripple;
 
@@ -152,26 +104,21 @@ void signData (std::string const& data,
         throw std::runtime_error (
             "Syntax error: Must specify data string to sign");
 
-    auto keys = ValidatorKeys::make_ValidatorKeys (keyFile);
-
-    if (keys.revoked())
-        std::cout << "WARNING: Validator keys have been revoked!\n\n";
+    ValidatorKeys const keys (secretKey, KeyType::ed25519);
 
     std::cout << keys.sign (data) << std::endl;
     std::cout << std::endl;
 }
 
 int runCommand (std::string const& command,
-    std::vector <std::string> const& args,
-    boost::filesystem::path const& keyFile)
+    std::vector <std::string> const& args)
 {
     using namespace std;
 
     static map<string, vector<string>::size_type> const commandArgs = {
-        { "create_keys", 0 },
-        { "create_token", 0 },
-        { "revoke_keys", 0 },
-        { "sign", 1 }};
+        { "authorize_key", 3 },
+        { "revoke_key", 1 },
+        { "sign", 2 }};
 
     auto const iArgs = commandArgs.find (command);
 
@@ -181,43 +128,34 @@ int runCommand (std::string const& command,
     if (args.size() != iArgs->second)
         throw std::runtime_error ("Syntax error: Wrong number of arguments");
 
-    if (command == "create_keys")
-        createKeyFile (keyFile);
-    else if (command == "create_token")
-        createToken (keyFile);
-    else if (command == "revoke_keys")
-        createRevocation (keyFile);
+    if (command == "authorize_key")
+    {
+        std::uint32_t sequence;
+        try {
+            sequence = beast::lexicalCastThrow <std::uint32_t> (args[2]);
+        } catch (std::exception const&) {
+            throw std::runtime_error ("Sequence must be a number");
+        }
+        createManifest (args[0], args[1], sequence);
+    }
+    else if (command == "revoke_key")
+        createRevocation (args[0]);
     else if (command == "sign")
-        signData (args[0], keyFile);
+        signData (args[0], args[1]);
 
     return 0;
 }
 
 //LCOV_EXCL_START
-static
-std::string
-getEnvVar (char const* name)
-{
-    std::string value;
-
-    auto const v = getenv (name);
-
-    if (v != nullptr)
-        value = v;
-
-    return value;
-}
-
 void printHelp (const boost::program_options::options_description& desc)
 {
     std::cerr
         << "validator-keys [options] <command> [<argument> ...]\n"
         << desc << std::endl
         << "Commands: \n"
-           "     create_keys        Generate validator keys.\n"
-           "     create_token       Generate validator token.\n"
-           "     revoke_keys        Revoke validator keys.\n"
-           "     sign <data>        Sign string with validator key.\n";
+           "     authorize_key <masterkey> <key> <seq> Authorize key with master key.\n"
+           "     revoke_key <masterkey>                Revoke master key.\n"
+           "     sign <key> <data>                     Sign string with key.\n";
 }
 //LCOV_EXCL_STOP
 
@@ -257,7 +195,6 @@ int main (int argc, char** argv)
     po::options_description general ("General Options");
     general.add_options ()
     ("help,h", "Display this message.")
-    ("keyfile", po::value<std::string> (), "Specify the key file.")
     ("unittest,u", "Perform unit tests.")
     ("version", "Display the build version.")
     ;
@@ -312,23 +249,11 @@ int main (int argc, char** argv)
         return EXIT_SUCCESS;
     }
 
-    std::string const homeDir = getEnvVar ("HOME");
-    std::string const defaultKeyFile =
-        (homeDir.empty () ?
-            boost::filesystem::current_path ().string () : homeDir) +
-        "/.ripple/validator-keys.json";
-
     try
     {
-        using namespace boost::filesystem;
-        path keyFile = vm.count ("keyfile") ?
-            vm["keyfile"].as<std::string> () :
-            defaultKeyFile;
-
         return runCommand (
             vm["command"].as<std::string>(),
-            vm["arguments"].as<std::vector<std::string>>(),
-            keyFile);
+            vm["arguments"].as<std::vector<std::string>>());
     }
     catch(std::exception const& e)
     {

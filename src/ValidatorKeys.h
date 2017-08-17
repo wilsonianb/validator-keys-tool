@@ -21,14 +21,6 @@
 #include <ripple/crypto/KeyType.h>
 #include <ripple/protocol/SecretKey.h>
 
-namespace boost
-{
-namespace filesystem
-{
-class path;
-}
-}
-
 namespace ripple {
 
 struct ValidatorToken
@@ -46,28 +38,12 @@ private:
     KeyType keyType_;
     PublicKey publicKey_;
     SecretKey secretKey_;
-    std::uint32_t tokenSequence_;
-    bool revoked_;
 
 public:
     explicit
     ValidatorKeys (
+        std::string const& secretKey,
         KeyType const& keyType);
-
-    ValidatorKeys (
-        KeyType const& keyType,
-        SecretKey const& secretKey,
-        std::uint32_t sequence,
-        bool revoked = false);
-
-    /** Returns ValidatorKeys constructed from JSON file
-
-        @param keyFile Path to JSON key file
-
-        @throws std::runtime_error if file content is invalid
-    */
-    static ValidatorKeys make_ValidatorKeys(
-        boost::filesystem::path const& keyFile);
 
     ~ValidatorKeys () = default;
 
@@ -75,58 +51,43 @@ public:
     operator==(ValidatorKeys const& rhs) const
     {
         // TODO Compare secretKey_
-        return revoked_ == rhs.revoked_ &&
-            keyType_ == rhs.keyType_ &&
-            tokenSequence_ == rhs.tokenSequence_ &&
+        return keyType_ == rhs.keyType_ &&
             publicKey_ == rhs.publicKey_;
     }
 
-    /** Write keys to JSON file
+    /** Returns base64-encoded manifest
 
-        @param keyFile Path to file to write
-
-        @note Overwrites existing key file
-
-        @throws std::runtime_error if unable to create parent directory
+        @param secretKey Hex-encoded secret key to be authorized
+        @param keyType Key type for the authorized key
+        @param sequence Sequence number of the authorization manifest
     */
-    void
-    writeToFile (boost::filesystem::path const& keyFile) const;
-
-    /** Returns validator token for current sequence
-
-        @param keyType Key type for the token keys
-    */
-    boost::optional<ValidatorToken>
-    createValidatorToken (KeyType const& keyType = KeyType::secp256k1);
+    boost::optional<std::string>
+    createManifest (
+        std::string const& secretKey,
+        KeyType const& keyType,
+        std::uint32_t const& sequence) const;
 
     /** Revokes validator keys
 
         @return base64-encoded key revocation
     */
     std::string
-    revoke ();
+    revoke () const;
 
     /** Signs string with validator key
 
-    @papam data String to sign
+    @param data String to sign
 
     @return hex-encoded signature
     */
     std::string
-    sign (std::string const& data);
+    sign (std::string const& data) const;
 
     /** Returns the public key. */
     PublicKey const&
     publicKey () const
     {
         return publicKey_;
-    }
-
-    /** Returns true if keys are revoked. */
-    bool
-    revoked () const
-    {
-        return revoked_;
     }
 };
 

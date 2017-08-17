@@ -21,31 +21,20 @@
 #include <boost/optional.hpp>
 #include <vector>
 
-namespace boost
-{
-namespace filesystem
-{
-class path;
-}
-}
-
 std::string const&
 getVersionString ();
 
 void
-createKeyFile (boost::filesystem::path const& keyFile);
+createManifest (std::string const& masterSecretKey,
+    std::string const& secretKey,
+    std::uint32_t const& sequence);
 
 void
-createToken (boost::filesystem::path const& keyFile);
+createRevocation (std::string const& masterSecretKey);
 
 void
-createRevocation (boost::filesystem::path const& keyFile);
-
-void
-signData (std::string const& data,
-    boost::filesystem::path const& keyFile);
+signData (std::string const& secretKey, std::string const& data);
 
 int
 runCommand (std::string const& command,
-    std::vector <std::string> const& arg,
-    boost::filesystem::path const& keyFile);
+    std::vector <std::string> const& arg);

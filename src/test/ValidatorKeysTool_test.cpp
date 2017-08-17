@@ -19,7 +19,7 @@
 
 #include <ValidatorKeysTool.h>
 #include <ValidatorKeys.h>
-#include <test/KeyFileGuard.h>
+#include <ripple/beast/unit_test.h>
 #include <ripple/protocol/SecretKey.h>
 
 namespace ripple {
@@ -48,57 +48,22 @@ private:
     };
 
     void
-    testCreateKeyFile ()
+    testCreateManifest ()
     {
-        testcase ("Create Key File");
+        testcase ("Create manifest");
 
         std::stringstream coutCapture;
         CoutRedirect coutRedirect {coutCapture};
 
-        using namespace boost::filesystem;
-
-        std::string const subdir = "test_key_file";
-        KeyFileGuard const g (*this, subdir);
-        path const keyFile = subdir / "validator_keys.json";
-
-        createKeyFile (keyFile);
-        BEAST_EXPECT(exists(keyFile));
-
-        std::string const expectedError = "Refusing to overwrite existing key file: " +
-            keyFile.string();
-        std::string error;
-        try
-        {
-            createKeyFile (keyFile);
-        }
-        catch (std::exception const& e)
-        {
-            error = e.what();
-        }
-        BEAST_EXPECT(error == expectedError);
-    }
-
-    void
-    testCreateToken ()
-    {
-        testcase ("Create Token");
-
-        std::stringstream coutCapture;
-        CoutRedirect coutRedirect {coutCapture};
-
-        using namespace boost::filesystem;
-
-        std::string const subdir = "test_key_file";
-        KeyFileGuard const g (*this, subdir);
-        path const keyFile = subdir / "validator_keys.json";
-
-        auto testToken = [this](
-            path const& keyFile,
+        auto testManifest = [this](
+            std::string const& masterSecretKey,
+            std::string const& secretKey,
+            std::uint32_t const& sequence,
             std::string const& expectedError)
         {
             try
             {
-                createToken (keyFile);
+                createManifest (masterSecretKey, secretKey, sequence);
                 BEAST_EXPECT(expectedError.empty());
             }
             catch (std::exception const& e)
@@ -108,37 +73,12 @@ private:
         };
 
         {
-            std::string const expectedError =
-                "Failed to open key file: " + keyFile.string();
-            testToken (keyFile, expectedError);
-        }
-
-        createKeyFile (keyFile);
-
-        {
             std::string const expectedError = "";
-            testToken (keyFile, expectedError);
-        }
-        {
-            auto const keyType = KeyType::ed25519;
-            auto const kp = generateKeyPair (keyType, randomSeed ());
-
-            auto keys = ValidatorKeys (
-                keyType,
-                kp.second,
-                std::numeric_limits<std::uint32_t>::max () - 1);
-
-            keys.writeToFile (keyFile);
-            std::string const expectedError =
-                "Maximum number of tokens have already been generated.\n"
-                "Revoke validator keys if previous token has been compromised.";
-            testToken (keyFile, expectedError);
-        }
-        {
-            createRevocation (keyFile);
-            std::string const expectedError =
-                "Validator keys have been revoked.";
-            testToken (keyFile, expectedError);
+            testManifest (
+                randomSecretKey().to_string(),
+                randomSecretKey().to_string(),
+                1,
+                expectedError);
         }
     }
 
@@ -150,27 +90,7 @@ private:
         std::stringstream coutCapture;
         CoutRedirect coutRedirect {coutCapture};
 
-        using namespace boost::filesystem;
-
-        std::string const subdir = "test_key_file";
-        KeyFileGuard const g (*this, subdir);
-        path const keyFile = subdir / "validator_keys.json";
-
-        auto expectedError =
-            "Failed to open key file: " + keyFile.string();
-        std::string error;
-        try {
-            createRevocation (keyFile);
-        } catch (std::runtime_error& e) {
-            error = e.what();
-        }
-        BEAST_EXPECT(error == expectedError);
-
-        createKeyFile (keyFile);
-        BEAST_EXPECT(exists(keyFile));
-
-        createRevocation (keyFile);
-        createRevocation (keyFile);
+        createRevocation (randomSecretKey().to_string());
     }
 
     void
@@ -181,16 +101,14 @@ private:
         std::stringstream coutCapture;
         CoutRedirect coutRedirect {coutCapture};
 
-        using namespace boost::filesystem;
-
         auto testSign = [this](
+            std::string const& secretKey,
             std::string const& data,
-            path const& keyFile,
             std::string const& expectedError)
         {
             try
             {
-                signData (data, keyFile);
+                signData (secretKey, data);
                 BEAST_EXPECT(expectedError.empty());
             }
             catch (std::exception const& e)
@@ -199,30 +117,19 @@ private:
             }
         };
 
+        std::string const secretKey =
+            randomSecretKey().to_string();
         std::string const data = "data to sign";
-
-        std::string const subdir = "test_key_file";
-        KeyFileGuard const g (*this, subdir);
-        path const keyFile = subdir / "validator_keys.json";
-
-        {
-            std::string const expectedError =
-                "Failed to open key file: " + keyFile.string();
-            testSign (data, keyFile, expectedError);
-        }
-
-        createKeyFile (keyFile);
-        BEAST_EXPECT(exists(keyFile));
 
         {
             std::string const emptyData = "";
             std::string const expectedError =
                 "Syntax error: Must specify data string to sign";
-            testSign (emptyData, keyFile, expectedError);
+            testSign (secretKey, emptyData, expectedError);
         }
         {
             std::string const expectedError = "";
-            testSign (data, keyFile, expectedError);
+            testSign (secretKey, data, expectedError);
         }
     }
 
@@ -234,21 +141,14 @@ private:
         std::stringstream coutCapture;
         CoutRedirect coutRedirect {coutCapture};
 
-        using namespace boost::filesystem;
-
-        std::string const subdir = "test_key_file";
-        KeyFileGuard g (*this, subdir);
-        path const keyFile = subdir / "validator_keys.json";
-
         auto testCommand = [this](
             std::string const& command,
             std::vector <std::string> const& args,
-            path const& keyFile,
             std::string const& expectedError)
         {
             try
             {
-                runCommand (command, args, keyFile);
+                runCommand (command, args);
                 BEAST_EXPECT(expectedError.empty());
             }
             catch (std::exception const& e)
@@ -257,41 +157,55 @@ private:
             }
         };
 
+        std::string const masterSecretKey =
+            randomSecretKey().to_string();
+        std::string const secretKey =
+            randomSecretKey().to_string();
         std::vector <std::string> const noArgs;
-        std::vector <std::string> const oneArg = { "some data" };
-        std::vector <std::string> const twoArgs = { "data", "more data" };
+        std::vector <std::string> const oneArg = { "data" };
+        std::vector <std::string> const twoArgs = { "more", "data" };
+        std::vector <std::string> const threeArgs = { "even", "more", "data" };
+        std::vector <std::string> const fourArgs = { "way", "too", "much", "data" };
         std::string const noError = "";
         std::string const argError = "Syntax error: Wrong number of arguments";
         {
             std::string const command = "unknown";
             std::string const expectedError = "Unknown command: " + command;
-            testCommand (command, noArgs, keyFile, expectedError);
-            testCommand (command, oneArg, keyFile, expectedError);
-            testCommand (command, twoArgs, keyFile, expectedError);
+            testCommand (command, noArgs, expectedError);
+            testCommand (command, oneArg, expectedError);
+            testCommand (command, twoArgs, expectedError);
+            testCommand (command, threeArgs, expectedError);
+            testCommand (command, fourArgs, expectedError);
         }
         {
-            std::string const command = "create_keys";
-            testCommand (command, noArgs, keyFile, noError);
-            testCommand (command, oneArg, keyFile, argError);
-            testCommand (command, twoArgs, keyFile, argError);
+            std::string const command = "authorize_key";
+            testCommand (command, noArgs, argError);
+            testCommand (command, oneArg, argError);
+            testCommand (command, twoArgs, argError);
+            testCommand (command, fourArgs, argError);
+
+            std::string const expectedError = "Sequence must be a number";
+            testCommand (command, {masterSecretKey, secretKey, "not a number"}, expectedError);
+
+            testCommand (command, {masterSecretKey, secretKey, "1"}, noError);
         }
         {
-            std::string const command = "create_token";
-            testCommand (command, noArgs, keyFile, noError);
-            testCommand (command, oneArg, keyFile, argError);
-            testCommand (command, twoArgs, keyFile, argError);
-        }
-        {
-            std::string const command = "revoke_keys";
-            testCommand (command, noArgs, keyFile, noError);
-            testCommand (command, oneArg, keyFile, argError);
-            testCommand (command, twoArgs, keyFile, argError);
+            std::string const command = "revoke_key";
+            testCommand (command, noArgs, argError);
+            testCommand (command, twoArgs, argError);
+            testCommand (command, threeArgs, argError);
+            testCommand (command, fourArgs, argError);
+
+            testCommand (command, {masterSecretKey}, noError);
         }
         {
             std::string const command = "sign";
-            testCommand (command, noArgs, keyFile, argError);
-            testCommand (command, oneArg, keyFile, noError);
-            testCommand (command, twoArgs, keyFile, argError);
+            testCommand (command, noArgs, argError);
+            testCommand (command, oneArg, argError);
+            testCommand (command, threeArgs, argError);
+            testCommand (command, fourArgs, argError);
+
+            testCommand (command, {secretKey, "data"}, noError);
         }
     }
 
@@ -301,8 +215,7 @@ public:
     {
         getVersionString();
 
-        testCreateKeyFile ();
-        testCreateToken ();
+        testCreateManifest ();
         testCreateRevocation ();
         testSign ();
         testRunCommand ();

@@ -18,8 +18,8 @@
 //==============================================================================
 
 #include <ValidatorKeys.h>
-#include <test/KeyFileGuard.h>
 #include <ripple/basics/StringUtilities.h>
+#include <ripple/beast/unit_test.h>
 #include <ripple/protocol/HashPrefix.h>
 #include <ripple/protocol/Sign.h>
 #include <beast/core/detail/base64.hpp>
@@ -31,181 +31,84 @@ namespace tests {
 class ValidatorKeys_test : public beast::unit_test::suite
 {
 private:
-
-    void
-    testKeyFile (boost::filesystem::path const& keyFile,
-        Json::Value const& jv, std::string const& expectedError)
-    {
-        {
-            std::ofstream o (keyFile.string (), std::ios_base::trunc);
-            o << jv.toStyledString();
-            o.close();
-        }
-
-        try {
-            ValidatorKeys::make_ValidatorKeys (keyFile);
-            BEAST_EXPECT(expectedError.empty());
-        } catch (std::runtime_error& e) {
-            BEAST_EXPECT(e.what() == expectedError);
-        }
-    }
-
     std::array<KeyType, 2> const keyTypes {{
         KeyType::ed25519,
         KeyType::secp256k1 }};
 
     void
-    testMakeValidatorKeys ()
+    testValidatorKeys ()
     {
         testcase ("Make Validator Keys");
 
-        using namespace boost::filesystem;
-
-        std::string const subdir = "test_key_file";
-        path const keyFile = subdir / "validator_keys.json";
+        auto testBadKey = [this](
+            std::string const& badSecret,
+            KeyType const& keyType)
+        {
+            try
+            {
+                ValidatorKeys const impossibleKeys (badSecret, keyType);
+                fail();
+            }
+            catch (std::exception const& e)
+            {
+                std::string const expectedError = "ValidatorKeys requires 32 byte hex-encoded secret key.";
+                BEAST_EXPECT(e.what() == expectedError);
+            }
+        };
 
         for (auto const keyType : keyTypes)
         {
-            ValidatorKeys const keys (keyType);
+            auto const kp = randomKeyPair(keyType);
 
-            KeyFileGuard const g (*this, subdir);
+            ValidatorKeys const keys (kp.second.to_string(), keyType);
 
-            keys.writeToFile (keyFile);
-            BEAST_EXPECT (exists (keyFile));
-
-            auto const keys2 = ValidatorKeys::make_ValidatorKeys (keyFile);
-            BEAST_EXPECT (keys == keys2);
-        }
-        {
-            // Require expected fields
-            KeyFileGuard g (*this, subdir);
-
-            auto expectedError =
-                "Failed to open key file: " + keyFile.string();
-            std::string error;
-            try {
-                ValidatorKeys::make_ValidatorKeys (keyFile);
-            } catch (std::runtime_error& e) {
-                error = e.what();
-            }
-            BEAST_EXPECT(error == expectedError);
-
-            expectedError =
-                "Unable to parse json key file: " + keyFile.string();
+            BEAST_EXPECT (kp.first == keys.publicKey());
 
             {
-                std::ofstream o (keyFile.string (), std::ios_base::trunc);
-                o << "{{}";
-                o.close();
+                std::string const badSecret = "this is not a hex-encoded secret key";
+                testBadKey (badSecret, keyType);
             }
-
-            try {
-                ValidatorKeys::make_ValidatorKeys (keyFile);
-            } catch (std::runtime_error& e) {
-                error = e.what();
-            }
-            BEAST_EXPECT(error == expectedError);
-
-            Json::Value jv;
-            jv["dummy"] = "field";
-            expectedError = "Key file '" + keyFile.string() +
-                "' is missing \"key_type\" field";
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["key_type"] = "dummy keytype";
-            expectedError = "Key file '" + keyFile.string() +
-                "' is missing \"secret_key\" field";
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["secret_key"] = "dummy secret";
-            expectedError = "Key file '" + keyFile.string() +
-                "' is missing \"token_sequence\" field";
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["token_sequence"] = "dummy sequence";
-            expectedError = "Key file '" + keyFile.string() +
-                "' is missing \"revoked\" field";
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["revoked"] = "dummy revoked";
-            expectedError = "Key file '" + keyFile.string() +
-                "' contains invalid \"key_type\" field: " +
-                jv["key_type"].toStyledString();
-            testKeyFile (keyFile, jv, expectedError);
-
-            auto const keyType = KeyType::ed25519;
-            jv["key_type"] = to_string(keyType);
-            expectedError = "Key file '" + keyFile.string() +
-                "' contains invalid \"secret_key\" field: " +
-                jv["secret_key"].toStyledString();
-            testKeyFile (keyFile, jv, expectedError);
-
-            ValidatorKeys const keys (keyType);
             {
-                auto const kp = generateKeyPair (keyType, randomSeed ());
-                jv["secret_key"] =
-                    toBase58(TOKEN_NODE_PRIVATE, kp.second);
+                std::string const badSecret = "ABC123";
+                testBadKey (badSecret, keyType);
             }
-            expectedError = "Key file '" + keyFile.string() +
-                "' contains invalid \"token_sequence\" field: " +
-                jv["token_sequence"].toStyledString();
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["token_sequence"] = -1;
-            expectedError = "Key file '" + keyFile.string() +
-                "' contains invalid \"token_sequence\" field: " +
-                jv["token_sequence"].toStyledString();
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["token_sequence"] =
-                Json::UInt(std::numeric_limits<std::uint32_t>::max ());
-            expectedError = "Key file '" + keyFile.string() +
-                "' contains invalid \"revoked\" field: " +
-                jv["revoked"].toStyledString();
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["revoked"] = false;
-            expectedError = "";
-            testKeyFile (keyFile, jv, expectedError);
-
-            jv["revoked"] = true;
-            testKeyFile (keyFile, jv, expectedError);
         }
     }
 
     void
-    testCreateValidatorToken ()
+    testCreateManifest ()
     {
-        testcase ("Create Validator Token");
+        testcase ("Create Manifest");
 
-        for (auto const keyType : keyTypes)
+        for (auto const masterKeyType : keyTypes)
         {
-            ValidatorKeys keys (keyType);
-            std::uint32_t sequence = 0;
+            ValidatorKeys keys (
+                randomSecretKey ().to_string(),
+                masterKeyType);
+            std::uint32_t sequence = 5;
 
-            for (auto const tokenKeyType : keyTypes)
+            for (auto const keyType : keyTypes)
             {
-                auto const token = keys.createValidatorToken (tokenKeyType);
+                auto const kp = randomKeyPair (keyType);
 
-                if(! BEAST_EXPECT(token))
+                auto const manifest = keys.createManifest (kp.second.to_string(), keyType, sequence);
+
+                if (! BEAST_EXPECT(manifest))
                     continue;
 
-                auto const tokenPublicKey =
-                    derivePublicKey(tokenKeyType, token->secretKey);
-
                 STObject st (sfGeneric);
-                auto const manifest = beast::detail::base64_decode(token->manifest);
-                SerialIter sit (manifest.data (), manifest.size ());
+                auto const m = beast::detail::base64_decode(*manifest);
+                SerialIter sit (m.data (), m.size ());
                 st.set (sit);
 
                 auto const seq = get (st, sfSequence);
                 BEAST_EXPECT (seq);
-                BEAST_EXPECT (*seq == ++sequence);
+                BEAST_EXPECT (*seq == sequence);
 
                 auto const tpk = get<PublicKey>(st, sfSigningPubKey);
                 BEAST_EXPECT (tpk);
-                BEAST_EXPECT (*tpk == tokenPublicKey);
-                BEAST_EXPECT (verify (st, HashPrefix::manifest, tokenPublicKey));
+                BEAST_EXPECT (*tpk == kp.first);
+                BEAST_EXPECT (verify (st, HashPrefix::manifest, kp.first));
 
                 auto const pk = get<PublicKey>(st, sfPublicKey);
                 BEAST_EXPECT (pk);
@@ -213,21 +116,19 @@ private:
                 BEAST_EXPECT (verify (
                     st, HashPrefix::manifest, keys.publicKey (),
                     sfMasterSignature));
+
+                BEAST_EXPECT(! keys.createManifest (kp.second.to_string(), keyType,
+                    std::numeric_limits<std::uint32_t>::max ()));
+                {
+                    std::string const badSecret = "this is not a hex-encoded secret key";
+                    BEAST_EXPECT(! keys.createManifest (badSecret, keyType, sequence));
+                }
+                {
+                    std::string const badSecret = "ABC123";
+                    BEAST_EXPECT(! keys.createManifest (badSecret, keyType, sequence));
+                }
             }
         }
-
-        auto const keyType = KeyType::ed25519;
-        auto const kp = generateKeyPair (keyType, randomSeed ());
-
-        auto keys = ValidatorKeys (
-            keyType,
-            kp.second,
-            std::numeric_limits<std::uint32_t>::max () - 1);
-
-        BEAST_EXPECT (! keys.createValidatorToken (keyType));
-
-        keys.revoke ();
-        BEAST_EXPECT (! keys.createValidatorToken (keyType));
     }
 
     void
@@ -237,7 +138,9 @@ private:
 
         for (auto const keyType : keyTypes)
         {
-            ValidatorKeys keys (keyType);
+            ValidatorKeys keys (
+                randomKeyPair(keyType).second.to_string(),
+                keyType);
 
             auto const revocation = keys.revoke ();
 
@@ -278,7 +181,7 @@ private:
         for (auto const keyType : keyTypes)
         {
             auto const sk = generateSecretKey(keyType, generateSeed("test"));
-            ValidatorKeys keys (keyType, sk, 1);
+            ValidatorKeys keys (sk.to_string(), keyType);
 
             auto const signature = keys.sign (data);
             BEAST_EXPECT(expected[keyType] == signature);
@@ -293,103 +196,14 @@ private:
         }
     }
 
-    void
-    testWriteToFile ()
-    {
-        testcase ("Write to File");
-
-        using namespace boost::filesystem;
-
-        auto const keyType = KeyType::ed25519;
-        ValidatorKeys keys (keyType);
-
-        {
-            std::string const subdir = "test_key_file";
-            path const keyFile = subdir / "validator_keys.json";
-            KeyFileGuard g (*this, subdir);
-
-            keys.writeToFile (keyFile);
-            BEAST_EXPECT(exists (keyFile));
-
-            auto fileKeys = ValidatorKeys::make_ValidatorKeys (keyFile);
-            BEAST_EXPECT (keys == fileKeys);
-
-            // Overwrite file with new sequence
-            keys.createValidatorToken (KeyType::secp256k1);
-            keys.writeToFile (keyFile);
-
-            fileKeys = ValidatorKeys::make_ValidatorKeys (keyFile);
-            BEAST_EXPECT (keys == fileKeys);
-        }
-        {
-            // Write to key file in current relative directory
-            path const keyFile = "test_validator_keys.json";
-            if (!exists (keyFile))
-            {
-                keys.writeToFile (keyFile);
-                remove (keyFile.string());
-            }
-            else
-            {
-                // Cannot run the test. Someone created a file
-                // where we want to put our key file
-                Throw<std::runtime_error> (
-                    "Cannot create key file: " + keyFile.string ());
-            }
-        }
-        {
-            // Create key file directory
-            std::string const subdir = "test_key_file";
-            path const keyFile =
-                subdir / "directories/to/create/validator_keys.json";
-            KeyFileGuard g (*this, subdir);
-
-            keys.writeToFile (keyFile);
-            BEAST_EXPECT(exists (keyFile));
-
-            auto const fileKeys = ValidatorKeys::make_ValidatorKeys (keyFile);
-            BEAST_EXPECT (keys == fileKeys);
-        }
-        {
-            // Fail if file cannot be opened for write
-            std::string const subdir = "test_key_file";
-            KeyFileGuard g (*this, subdir);
-
-            path const badKeyFile = subdir / ".";
-            auto expectedError = "Cannot open key file: " + badKeyFile.string();
-            std::string error;
-            try {
-                keys.writeToFile (badKeyFile);
-            } catch (std::runtime_error& e) {
-                error = e.what();
-            }
-            BEAST_EXPECT(error == expectedError);
-
-            // Fail if parent directory is existing file
-            path const keyFile = subdir / "validator_keys.json";
-            keys.writeToFile (keyFile);
-            path const conflictingPath =
-                keyFile / "validators_keys.json";
-            expectedError = "Cannot create directory: " +
-                conflictingPath.parent_path().string();
-            try {
-                keys.writeToFile (conflictingPath);
-            } catch (std::runtime_error& e) {
-                error = e.what();
-            }
-            BEAST_EXPECT(error == expectedError);
-        }
-    }
-
 public:
     void
     run() override
     {
-        testMakeValidatorKeys ();
-        testCreateValidatorToken ();
+        testValidatorKeys ();
+        testCreateManifest ();
         testRevoke ();
         testSign ();
-        testWriteToFile ();
     }
 };
 
