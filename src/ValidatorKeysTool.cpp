@@ -86,7 +86,7 @@ void createKeyFile (boost::filesystem::path const& keyFile)
     ValidatorKeys const keys (KeyType::ed25519);
     keys.writeToFile (keyFile);
 
-    std::cout << "Validator keys stored in " <<
+    std::cout << "Master keys stored in " <<
         keyFile.string() <<
         "\n\nThis file should be stored securely and not shared.\n\n";
 }
@@ -101,7 +101,7 @@ void createToken (boost::filesystem::path const& keyFile)
         throw std::runtime_error (
             "Validator keys have been revoked.");
 
-    auto const token = keys.createValidatorToken ();
+    auto const token = keys.createValidatorToken (KeyType::ed25519);
 
     if (! token)
         throw std::runtime_error (
@@ -111,16 +111,22 @@ void createToken (boost::filesystem::path const& keyFile)
     // Update key file with new token sequence
     keys.writeToFile (keyFile);
 
-    std::cout << "Update rippled.cfg file with these values and restart rippled:\n\n";
-    std::cout << "# validator public key: " <<
-        toBase58 (TOKEN_NODE_PUBLIC, keys.publicKey()) << "\n\n";
-    std::cout << "[validator_token]\n";
+    boost::filesystem::path const signingKeyFile =
+        keyFile.parent_path() / "signing-keys.json";
 
-    auto const tokenStr = token->toString();
-    auto const len = 72;
-    for (auto i = 0; i < tokenStr.size(); i += len)
-        std::cout << tokenStr.substr(i, len) << std::endl;
+    if (exists (signingKeyFile))
+        throw std::runtime_error (
+            "Refusing to overwrite existing key file: " +
+                keyFile.string ());
 
+    ValidatorKeys const signingKeys (KeyType::ed25519, token->secretKey, 0);
+    signingKeys.writeToFile (signingKeyFile);
+
+    std::cout << "Signing keys stored in " <<
+        signingKeyFile.string() <<
+        "\n\nThis file should be stored securely and not shared.\n\n";
+    std::cout << "manifest:\n";
+    std::cout << token->manifest << std::endl;
     std::cout << std::endl;
 }
 

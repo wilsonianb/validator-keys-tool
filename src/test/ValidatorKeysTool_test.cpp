@@ -91,8 +91,9 @@ private:
         std::string const subdir = "test_key_file";
         KeyFileGuard const g (*this, subdir);
         path const keyFile = subdir / "validator_keys.json";
+        path const signingKeyFile = subdir / "signing-keys.json";
 
-        auto testToken = [this](
+        auto testToken = [this, &signingKeyFile](
             path const& keyFile,
             std::string const& expectedError)
         {
@@ -100,6 +101,7 @@ private:
             {
                 createToken (keyFile);
                 BEAST_EXPECT(expectedError.empty());
+                BEAST_EXPECT(exists(signingKeyFile));
             }
             catch (std::exception const& e)
             {
