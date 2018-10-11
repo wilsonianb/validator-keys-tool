@@ -106,16 +106,17 @@ ValidatorKeys::make_ValidatorKeys (
             jKeys["key_type"].toStyledString());
     }
 
-    auto const secret = parseBase58<SecretKey> (
-        TokenType::TOKEN_NODE_PRIVATE, jKeys["secret_key"].asString());
+    auto const ret = strUnHex (jKeys["secret_key"].asString());
 
-    if (! secret)
+    if (! ret.second || ! ret.first.size())
     {
         throw std::runtime_error (
             "Key file '" + keyFile.string() +
             "' contains invalid \"secret_key\" field: " +
             jKeys["secret_key"].toStyledString());
     }
+
+    SecretKey const secret (Slice{ret.first.data(), ret.first.size()});
 
     std::uint32_t tokenSequence;
     try {
@@ -139,7 +140,7 @@ ValidatorKeys::make_ValidatorKeys (
             jKeys["revoked"].toStyledString());
 
     return ValidatorKeys (
-        keyType, *secret, tokenSequence, jKeys["revoked"].asBool());
+        keyType, secret, tokenSequence, jKeys["revoked"].asBool());
 }
 
 void
@@ -150,8 +151,8 @@ ValidatorKeys::writeToFile (
 
     Json::Value jv;
     jv["key_type"] = to_string(keyType_);
-    jv["public_key"] = toBase58(TOKEN_NODE_PUBLIC, publicKey_);
-    jv["secret_key"] = toBase58(TOKEN_NODE_PRIVATE, secretKey_);
+    jv["public_key"] = strHex(publicKey_.data(), publicKey_.size());
+    jv["secret_key"] = strHex(secretKey_.data(), secretKey_.size());
     jv["token_sequence"] = Json::UInt (tokenSequence_);
     jv["revoked"] = revoked_;
 

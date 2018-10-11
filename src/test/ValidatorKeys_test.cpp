@@ -144,7 +144,7 @@ private:
             {
                 auto const kp = generateKeyPair (keyType, randomSeed ());
                 jv["secret_key"] =
-                    toBase58(TOKEN_NODE_PRIVATE, kp.second);
+                    strHex(kp.second.data(), kp.second.size());
             }
             expectedError = "Key file '" + keyFile.string() +
                 "' contains invalid \"token_sequence\" field: " +
